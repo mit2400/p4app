@@ -1,0 +1,56 @@
+# mkkang
+# using STF from
+# https://github.com/p4lang/p4c/blob/master/testdata/p4_16_samples/v1model-special-ops-bmv2.stf
+
+
+# test clone operation from ingress to egress
+
+# first and only time through ingress
+##    table_add ipv4_da_lpm do_clone_i2e 10.3.0.55/32 => 0xd00d
+add ipv4_da_lpm ipv4.dstAddr:0x0a030037 ingress.do_clone_i2e(l2ptr:0xd00d)
+##    table_add mac_da set_bd_dmac_intf 0xd00d => 9 02:13:57:0d:d0:ff 1
+add mac_da fwd.l2ptr:0xd00d ingress.set_bd_dmac_intf(bd:9, dmac:0x0213570dd0ff, intf:1)
+
+# original packet through egress
+# this entry is also used by earlier resubmit test
+##    table_add send_frame rewrite_mac 9 => 00:11:22:33:44:55
+# This entry appears above, and so need not be added again here.
+add send_frame fwd.out_bd:9 rewrite_mac(smac:0x001122334455)
+
+# cloned packet through egress
+# no table entries matched
+##    mirroring_add 5 4
+# The mirroring_add command causes packets cloned to clone session id
+# 5, to be copied to egress_port 4.
+##mirroring_add 5 4
+
+# Ether(dst='52:54:00:12:35:02', src='08:00:27:f8:7b:ea') / IP(dst='10.3.0.55', src='10.0.2.15', ttl=64) / UDP(sport=5793, dport=80)
+#        MAC DA       MAC SA    ethtype start of IPv4 hdr   TTL       IPv4 SA  IPv4 DA  UDP header with 0 UDP payload bytes
+#                                  VVVV                     VV
+#        ------------ ------------ ---- ------------------- --        -------- --------
+packet 0 525400123502 080027f87bea 0800 4500 001c 0001 0000 4011 6488 0a00020f 0a030037 16a100500008d2a4
+
+# original packet out:
+# Ether(dst='02:13:57:0d:d0:ff', src='00:11:22:33:44:55') / IP(dst='10.3.0.55', src='10.0.2.15', ttl=63) / UDP(sport=5793, dport=80)
+# Note: Except that UDP checksum is not updated by the P4 program, so
+# that field of output packet is same as input packet, which is
+# incorrect because of changes in IPv4 header fields.
+#        MAC DA       MAC SA    ethtype start of IPv4 hdr   TTL       IPv4 SA  IPv4 DA  UDP header with 0 UDP payload bytes
+#                                  VVVV                     VV
+#        ------------ ------------ ---- ------------------- --        -------- --------
+expect 1 0213570dd0ff 001122334455 0800 4500 001c 0001 0000 3f11 6588 0a00020f 0a030037 16a100500008d2a4 $
+
+# cloned packet out:
+# 8-byte switch-to-cpu header containing data 0x012e012e5a5a5a5a, followed by:
+# Ether(dst='52:54:00:12:35:02', src='08:00:27:f8:7b:ea') / IP(dst='10.3.0.55', src='10.0.2.15', ttl=64) / UDP(sport=5793, dport=80)
+# Note that cloned packet has same contents as original packet, except
+# for the 8-byte header added in egress code.  Even the TTL decrement
+# and dest MAC address change made during ingress processing to the
+# original packet are not made in the clone.
+
+#        switch_to_cpu       MAC DA       MAC SA    ethtype start of IPv4 hdr   TTL       IPv4 SA  IPv4 DA  UDP header with 0 UDP payload bytes
+#        header                                        VVVV                     VV
+#        -----------------   ------------ ------------ ---- ------------------- --        -------- --------
+expect 4 012e012e 5a5a5a5a   525400123502 080027f87bea 0800 4500 001c 0001 0000 4011 6488 0a00020f 0a030037 16a100500008d2a4 $
+
+
